@@ -232,7 +232,7 @@ class ScreenService : Service() {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val text = stream.bufferedReader().use { it.readText() }
-            if (code == 404 && i < MODELS.size - 1) continue
+                        if ((code == 404 || code == 429 || code == 503) && i < MODELS.size - 1) continue
 
             val json = JSONObject(text)
             if (code !in 200..299) {
