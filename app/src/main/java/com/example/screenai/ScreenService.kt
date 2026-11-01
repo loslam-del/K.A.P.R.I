@@ -38,7 +38,7 @@ class ScreenService : Service() {
 
     companion object {
         const val ACTION_STOP = "com.example.screenai.STOP"
-        const val MODEL = "claude-sonnet-4-6"
+        val MODELS = listOf("gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3-flash-preview")
         const val CHANNEL = "screenai"
     }
 
@@ -55,6 +55,7 @@ class ScreenService : Service() {
     private var apiKey = ""
     private var prompt = ""
     private var mode = 0
+    private var modelIdx = 0
     private var intervalMs = 5000L
     private var w = 0
     private var h = 0
@@ -198,46 +199,60 @@ class ScreenService : Service() {
     }
 
     private fun askClaude(b64: String): String {
-        val messages = JSONArray()
+        val contents = JSONArray()
         for ((u, a) in history.takeLast(3)) {
-            messages.put(JSONObject().put("role", "user").put("content", u))
-            messages.put(JSONObject().put("role", "assistant").put("content", a))
+            contents.put(JSONObject().put("role", "user")
+                .put("parts", JSONArray().put(JSONObject().put("text", u))))
+            contents.put(JSONObject().put("role", "model")
+                .put("parts", JSONArray().put(JSONObject().put("text", a))))
         }
-        val content = JSONArray()
-            .put(JSONObject().put("type", "image").put("source",
-                JSONObject().put("type", "base64").put("media_type", "image/jpeg").put("data", b64)))
-            .put(JSONObject().put("type", "text").put("text", "Новый кадр экрана. Что важного?"))
-        messages.put(JSONObject().put("role", "user").put("content", content))
+        val parts = JSONArray()
+            .put(JSONObject().put("inlineData",
+                JSONObject().put("mimeType", "image/jpeg").put("data", b64)))
+            .put(JSONObject().put("text", "Новый кадр экрана. Что важного?"))
+        contents.put(JSONObject().put("role", "user").put("parts", parts))
 
         val body = JSONObject()
-            .put("model", MODEL)
-            .put("max_tokens", 400)
-            .put("system", systemPrompt())
-            .put("messages", messages)
+            .put("systemInstruction", JSONObject().put("parts",
+                JSONArray().put(JSONObject().put("text", systemPrompt()))))
+            .put("contents", contents)
+            .put("generationConfig", JSONObject().put("maxOutputTokens", 1024))
 
-        val conn = URL("https://api.anthropic.com/v1/messages").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.connectTimeout = 15000
-        conn.readTimeout = 60000
-        conn.doOutput = true
-        conn.setRequestProperty("content-type", "application/json")
-        conn.setRequestProperty("x-api-key", apiKey)
-        conn.setRequestProperty("anthropic-version", "2023-06-01")
-        conn.outputStream.use { it.write(body.toString().toByteArray()) }
+        for (i in modelIdx until MODELS.size) {
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/${MODELS[i]}:generateContent"
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 15000
+            conn.readTimeout = 60000
+            conn.doOutput = true
+            conn.setRequestProperty("content-type", "application/json")
+            conn.setRequestProperty("x-goog-api-key", apiKey)
+            conn.outputStream.use { it.write(body.toString().toByteArray()) }
 
-        val code = conn.responseCode
-        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val text = stream.bufferedReader().use { it.readText() }
-        val json = JSONObject(text)
-        if (code !in 200..299) {
-            throw RuntimeException(json.optJSONObject("error")?.optString("message") ?: "HTTP $code")
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream.bufferedReader().use { it.readText() }
+            if (code == 404 && i < MODELS.size - 1) continue
+
+            val json = JSONObject(text)
+            if (code !in 200..299) {
+                throw RuntimeException(json.optJSONObject("error")?.optString("message") ?: "HTTP $code")
+            }
+            modelIdx = i
+            var reply = ""
+            val cands = json.optJSONArray("candidates")
+            if (cands != null && cands.length() > 0) {
+                val ps = cands.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts")
+                if (ps != null) {
+                    for (k in 0 until ps.length()) reply += ps.getJSONObject(k).optString("text")
+                }
+            }
+            reply = reply.trim()
+            if (reply.isEmpty()) reply = "ок"
+            history.add("Новый кадр экрана." to reply)
+            return reply
         }
-        val arr = json.getJSONArray("content")
-        val sb = StringBuilder()
-        for (i in 0 until arr.length()) sb.append(arr.getJSONObject(i).optString("text"))
-        val reply = sb.toString().trim()
-        history.add("Новый кадр экрана." to reply)
-        return reply
+        throw RuntimeException("модель Gemini не найдена, проверь ключ")
     }
 
     private fun systemPrompt(): String {
