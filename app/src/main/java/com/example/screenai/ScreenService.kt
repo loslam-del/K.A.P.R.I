@@ -59,10 +59,12 @@ class ScreenService : Service() {
     private var intervalMs = 5000L
     private var w = 0
     private var h = 0
+    private var dpi = 0
 
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
+            checkSize()
             capture()
             main.postDelayed(this, intervalMs)
         }
@@ -102,6 +104,7 @@ class ScreenService : Service() {
             (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.getRealMetrics(dm)
             w = dm.widthPixels
             h = dm.heightPixels
+            dpi = dm.densityDpi
 
             val r = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
             reader = r
@@ -167,6 +170,20 @@ class ScreenService : Service() {
         overlay = tv
     }
 
+    @Suppress("DEPRECATION")
+    private fun checkSize() {
+        val dm = DisplayMetrics()
+        (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.getRealMetrics(dm)
+        if (dm.widthPixels == w && dm.heightPixels == h) return
+        w = dm.widthPixels
+        h = dm.heightPixels
+        val newReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+        display?.resize(w, h, dpi)
+        display?.setSurface(newReader.surface)
+        reader?.close()
+        reader = newReader
+    }
+
     private fun capture() {
         if (busy) return
         val img = reader?.acquireLatestImage() ?: return // экран не менялся — кадра нет
@@ -188,12 +205,13 @@ class ScreenService : Service() {
         scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
         val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 
+        val t0 = System.currentTimeMillis()
         busy = true
         net.execute {
             val reply = try { askClaude(b64) } catch (e: Exception) { "Ошибка: ${e.message}" }
             main.post {
                 busy = false
-                show(reply)
+                show(reply, t0)
             }
         }
     }
@@ -232,7 +250,7 @@ class ScreenService : Service() {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val text = stream.bufferedReader().use { it.readText() }
-                        if ((code == 404 || code == 429 || code == 503) && i < MODELS.size - 1) continue
+            if ((code == 404 || code == 429 || code == 503) && i < MODELS.size - 1) continue
 
             val json = JSONObject(text)
             if (code !in 200..299) {
@@ -262,11 +280,13 @@ class ScreenService : Service() {
                 "Если это выбор героев (пик или бан) — назови ОДНОГО лучшего героя для пика или бана, " +
                 "учитывая уже выбранных героев обеих команд и роль игрока, и одним предложением объясни почему. " +
                 "Если это игра на логику, головоломка или настольная игра — назови ОДИН лучший следующий ход " +
-                "конкретно: что и куда сделать. Если это другая игра — назови лучшее действие прямо сейчас. " +
+                "конкретно: что и куда сделать. Если ты не видишь на экране ни выбора героя, ни позиции, где нужен ход " +
+                "(лобби, меню, магазин, загрузка, сам бой), ответь «ок» и ничего не советуй. " +
                 "Формат: «Ход: … Почему: …». " +
                 "Если ситуация не изменилась с прошлого ответа или это не игра — ответь одним словом «ок»."
             1 -> "Ты игровой помощник. По скриншоту определи игру и ситуацию. " +
-                "Предложи 2–3 РАЗНЫХ способа действовать сейчас, каждый одной короткой строкой, " +
+                "Если на экране нет игровой ситуации, где нужно решение (лобби, меню, магазин, загрузка), ответь «ок». " +
+                "Иначе предложи 2–3 РАЗНЫХ способа действовать сейчас, каждый одной короткой строкой, " +
                 "с нумерацией «1.», «2.», «3.». Самый сильный вариант пометь словом «лучший». " +
                 "Если ситуация не изменилась с прошлого ответа или это не игра — ответь одним словом «ок»."
             else -> "Я пишу код. Смотри на экран и коротко (1–3 предложения) говори только о важном: " +
@@ -277,9 +297,10 @@ class ScreenService : Service() {
             "\nОтвечай по-русски и коротко. Игнорируй тёмное плавающее окошко с твоими прошлыми подсказками."
     }
 
-    private fun show(reply: String) {
+    private fun show(reply: String, t0: Long) {
         if (reply.lowercase().trim().trimEnd('.', '!') == "ок") return
-        overlay?.text = "К.А.П.Р.И: $reply"
+        val sec = (System.currentTimeMillis() - t0) / 1000
+        overlay?.text = "К.А.П.Р.И: $reply\n(ответ готовился $sec с)"
     }
 
     override fun onDestroy() {
