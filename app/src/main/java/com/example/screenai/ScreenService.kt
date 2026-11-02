@@ -1,12 +1,17 @@
 package com.example.screenai
 
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
+import android.animation.ValueAnimator
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
@@ -14,6 +19,7 @@ import android.graphics.drawable.Icon
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
+import android.media.MediaPlayer
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -24,6 +30,8 @@ import android.util.Base64
 import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.WindowManager
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
@@ -40,12 +48,23 @@ class ScreenService : Service() {
         const val ACTION_STOP = "com.example.screenai.STOP"
         val MODELS = listOf("gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3-flash-preview")
         const val CHANNEL = "screenai"
+        const val CHAR_DP = 90 // размер героини на экране, можно менять
     }
 
     private var projection: MediaProjection? = null
     private var reader: ImageReader? = null
     private var display: VirtualDisplay? = null
-    private var overlay: TextView? = null
+    private var overlayRoot: LinearLayout? = null
+    private var charView: ImageView? = null
+    private var bubble: TextView? = null
+    private var charAnim: ObjectAnimator? = null
+    private var player: MediaPlayer? = null
+    private val toIdle = Runnable { setIdle() }
+    private val powerReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_POWER_CONNECTED) playCharge()
+        }
+    }
     private val main = Handler(Looper.getMainLooper())
     private val net = Executors.newSingleThreadExecutor()
     private val history = ArrayList<Pair<String, String>>() // (что видел, что ответил)
@@ -114,6 +133,9 @@ class ScreenService : Service() {
             )
 
             addOverlay()
+            val filter = IntentFilter(Intent.ACTION_POWER_CONNECTED)
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(powerReceiver, filter, Context.RECEIVER_EXPORTED)
+            else registerReceiver(powerReceiver, filter)
             running = true
             main.postDelayed(tick, 1500)
         } catch (e: Exception) {
@@ -146,14 +168,28 @@ class ScreenService : Service() {
     }
 
     private fun addOverlay() {
-        val pad = (10 * resources.displayMetrics.density).toInt()
-        val tv = TextView(this).apply {
-            text = "К.А.П.Р.И на связи…"
-            setTextColor(0xFFFFFFFF.toInt())
-            setBackgroundColor(0xCC000000.toInt())
-            textSize = 14f
-            setPadding(pad, pad, pad, pad)
+        val d = resources.displayMetrics.density
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
         }
+        val img = ImageView(this).apply {
+            setImageResource(R.drawable.kapri_idle)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+        row.addView(img, LinearLayout.LayoutParams((CHAR_DP * d).toInt(), LinearLayout.LayoutParams.WRAP_CONTENT))
+        val tv = TextView(this).apply {
+            setBackgroundResource(R.drawable.kapri_frame)
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 14f
+            visibility = android.view.View.GONE
+        }
+        row.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            marginStart = (4 * d).toInt()
+            marginEnd = (4 * d).toInt()
+        })
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -164,10 +200,12 @@ class ScreenService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP
-            y = (60 * resources.displayMetrics.density).toInt()
+            y = (30 * d).toInt()
         }
-        (getSystemService(Context.WINDOW_SERVICE) as WindowManager).addView(tv, lp)
-        overlay = tv
+        (getSystemService(Context.WINDOW_SERVICE) as WindowManager).addView(row, lp)
+        overlayRoot = row
+        charView = img
+        bubble = tv
     }
 
     @Suppress("DEPRECATION")
@@ -294,19 +332,63 @@ class ScreenService : Service() {
         }
         val extra = if (prompt.isBlank()) "" else "\nДополнительно от пользователя: $prompt"
         return base + extra +
-            "\nОтвечай по-русски и коротко. Игнорируй тёмное плавающее окошко с твоими прошлыми подсказками."
+            "\nОтвечай по-русски и коротко. Игнорируй плавающую на экране аниме-героиню с красными волосами и рамку с текстом: это ты сама и твои прошлые подсказки."
+    }
+
+    private fun setIdle() {
+        charAnim?.cancel()
+        charAnim = null
+        charView?.apply { scaleX = 1f; scaleY = 1f; setImageResource(R.drawable.kapri_idle) }
+        bubble?.visibility = android.view.View.GONE
     }
 
     private fun show(reply: String, t0: Long) {
         if (reply.lowercase().trim().trimEnd('.', '!') == "ок") return
-        val sec = (System.currentTimeMillis() - t0) / 1000
-        overlay?.text = "К.А.П.Р.И: $reply\n(ответ готовился $sec с)"
+        main.removeCallbacks(toIdle)
+        charAnim?.cancel()
+        charAnim = null
+        charView?.apply { scaleX = 1f; scaleY = 1f; setImageResource(R.drawable.kapri_talk) }
+        bubble?.apply {
+            text = reply
+            visibility = android.view.View.VISIBLE
+        }
+        main.postDelayed(toIdle, (6000L + reply.length * 60L).coerceAtMost(25000L))
+    }
+
+    private fun playCharge() {
+        main.removeCallbacks(toIdle)
+        bubble?.visibility = android.view.View.GONE
+        charAnim?.cancel()
+        charView?.let { v ->
+            v.setImageResource(R.drawable.kapri_charge)
+            charAnim = ObjectAnimator.ofPropertyValuesHolder(
+                v,
+                PropertyValuesHolder.ofFloat("scaleX", 1f, 1.12f),
+                PropertyValuesHolder.ofFloat("scaleY", 1f, 1.12f)
+            ).apply {
+                duration = 300
+                repeatCount = ValueAnimator.INFINITE
+                repeatMode = ValueAnimator.REVERSE
+                start()
+            }
+        }
+        try {
+            player?.release()
+            player = MediaPlayer.create(this, R.raw.charge)?.apply {
+                setOnCompletionListener { it.release(); if (player === it) player = null }
+                start()
+            }
+        } catch (_: Exception) {}
+        main.postDelayed(toIdle, 3000)
     }
 
     override fun onDestroy() {
         running = false
         main.removeCallbacksAndMessages(null)
-        try { overlay?.let { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(it) } } catch (_: Exception) {}
+        try { unregisterReceiver(powerReceiver) } catch (_: Exception) {}
+        charAnim?.cancel()
+        try { player?.release() } catch (_: Exception) {}
+        try { overlayRoot?.let { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(it) } } catch (_: Exception) {}
         display?.release()
         reader?.close()
         try { projection?.stop() } catch (_: Exception) {}
