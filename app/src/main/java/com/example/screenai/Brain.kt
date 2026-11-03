@@ -53,7 +53,7 @@ object Brain {
         for (i in modelIdx until models.size) {
             val model = models[i]
             val cfg = JSONObject()
-                .put("maxOutputTokens", 400)
+                .put("maxOutputTokens", 260)
                 .put("responseMimeType", "application/json")
             if (model.contains("2.5")) cfg.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
             body.put("generationConfig", cfg)
@@ -61,8 +61,8 @@ object Brain {
             val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
-            conn.connectTimeout = 8000
-            conn.readTimeout = 20000
+            conn.connectTimeout = 6000
+            conn.readTimeout = 15000
             conn.doOutput = true
             conn.setRequestProperty("content-type", "application/json")
             conn.setRequestProperty("x-goog-api-key", apiKey)
