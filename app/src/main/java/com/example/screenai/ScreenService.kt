@@ -338,8 +338,8 @@ class ScreenService : Service() {
             val url = "https://generativelanguage.googleapis.com/v1beta/models/${MODELS[i]}:generateContent"
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
-            conn.connectTimeout = 15000
-            conn.readTimeout = 60000
+            conn.connectTimeout = 8000
+            conn.readTimeout = 18000
             conn.doOutput = true
             conn.setRequestProperty("content-type", "application/json")
             conn.setRequestProperty("x-goog-api-key", apiKey)
@@ -348,7 +348,7 @@ class ScreenService : Service() {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val response = stream?.bufferedReader()?.use { it.readText() } ?: ""
-            if ((code == 404 || code == 429 || code == 503) && i < MODELS.size - 1) continue
+            if (code == 404 && i < MODELS.size - 1) continue
             val json = JSONObject(response)
             if (code !in 200..299) {
                 throw RuntimeException(json.optJSONObject("error")?.optString("message") ?: "HTTP $code")
