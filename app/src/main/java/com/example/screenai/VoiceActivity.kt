@@ -4,7 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.view.View
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -27,6 +30,8 @@ class VoiceActivity : Activity() {
     private var ttsReady = false
     private var completed = false
     private val handler = Handler(Looper.getMainLooper())
+    private var rootView: View? = null
+    private var closing = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,16 +41,19 @@ class VoiceActivity : Activity() {
 
         status = TextView(this).apply {
             textSize = 16f
-            setTextColor(0xFFFFFFFF.toInt())
+            setTextColor(Color.rgb(125, 235, 150))
+            setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
             setPadding(pad, pad, pad, pad)
             background = GradientDrawable().apply {
-                setColor(0xE6101018.toInt())
-                cornerRadius = 18 * d
+                setColor(Color.rgb(12, 17, 13))
+                cornerRadius = 20 * d
+                setStroke((1.5f * d).toInt(), Color.rgb(65, 210, 105))
             }
             text = "К.А.П.Р.И слушает…"
         }
-        val root = FrameLayout(this)
+        val root = FrameLayout(this).apply { setBackgroundColor(0xE9080B09.toInt()) }
+        rootView = root
         root.addView(
             status,
             FrameLayout.LayoutParams(
@@ -58,8 +66,15 @@ class VoiceActivity : Activity() {
                 rightMargin = (24 * d).toInt()
             }
         )
-        root.setOnClickListener { finish() }
+        root.setOnClickListener { finishAnimated() }
         setContentView(root)
+        root.alpha = 0f
+        root.scaleX = 0.94f
+        root.scaleY = 0.94f
+        root.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(300).start()
+        status.alpha = 0f
+        status.translationY = 18f
+        status.animate().alpha(1f).translationY(0f).setStartDelay(90).setDuration(360).start()
 
         tts = TextToSpeech(this) { st ->
             if (st == TextToSpeech.SUCCESS) {
@@ -167,7 +182,31 @@ class VoiceActivity : Activity() {
     }
 
     private fun closeLater(ms: Long) {
-        handler.postDelayed({ finish() }, ms)
+        handler.postDelayed({ finishAnimated() }, ms)
+    }
+
+    private fun finishAnimated() {
+        if (closing || isFinishing) return
+        closing = true
+        val root = rootView
+        if (root == null) {
+            finishNow()
+            return
+        }
+        root.animate().alpha(0f).scaleX(0.94f).scaleY(0.94f)
+            .setDuration(220)
+            .withEndAction { finishNow() }
+            .start()
+    }
+
+    private fun finishNow() {
+        super.finish()
+        overridePendingTransition(0, 0)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        finishAnimated()
     }
 
     override fun onDestroy() {
