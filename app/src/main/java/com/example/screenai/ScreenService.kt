@@ -79,6 +79,7 @@ class ScreenService : Service() {
     private var mode = 0
     private var modelIdx = 0
     private var intervalMs = 5000L
+    @Volatile private var retryDelayMs = 0L
     private var w = 0
     private var h = 0
     private var dpi = 0
@@ -88,7 +89,8 @@ class ScreenService : Service() {
             if (!running) return
             checkSize()
             capture()
-            main.postDelayed(this, if (autopilot2048) 2200L else intervalMs)
+            val baseDelay = if (autopilot2048) 2200L else intervalMs
+            main.postDelayed(this, max(baseDelay, retryDelayMs))
         }
     }
 
@@ -291,6 +293,7 @@ class ScreenService : Service() {
             }
             main.post {
                 busy = false
+                retryDelayMs = if (result.first.startsWith("Ошибка:")) 8000L else 0L
                 if (autoMode && autopilot2048 && result.second != null) {
                     val service = KapriAccessibilityService.instance
                     if (service == null) {
@@ -338,8 +341,8 @@ class ScreenService : Service() {
             val url = "https://generativelanguage.googleapis.com/v1beta/models/${MODELS[i]}:generateContent"
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
-            conn.connectTimeout = 8000
-            conn.readTimeout = 18000
+            conn.connectTimeout = 6000
+            conn.readTimeout = 15000
             conn.doOutput = true
             conn.setRequestProperty("content-type", "application/json")
             conn.setRequestProperty("x-goog-api-key", apiKey)
