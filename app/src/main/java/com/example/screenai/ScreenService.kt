@@ -52,6 +52,7 @@ class ScreenService : Service() {
         @Volatile var paused = false // true, пока открыт чат или голосовой помощник
         @Volatile var active = false
         @Volatile var autopilot2048 = false
+        @Volatile var geometryDashAutopilot = false
     }
 
     private var projection: MediaProjection? = null
@@ -71,6 +72,7 @@ class ScreenService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private val net = Executors.newSingleThreadExecutor()
     private val history = ArrayList<Pair<String, String>>() // (что видел, что ответил)
+    private val geometryDashController = GeometryDashAutopilot()
 
     @Volatile private var busy = false
     private var running = false
@@ -89,7 +91,7 @@ class ScreenService : Service() {
             if (!running) return
             checkSize()
             capture()
-            val baseDelay = if (autopilot2048) 2200L else intervalMs
+            val baseDelay = when { geometryDashAutopilot -> 90L; autopilot2048 -> 2200L; else -> intervalMs }
             main.postDelayed(this, max(baseDelay, retryDelayMs))
         }
     }
@@ -100,6 +102,7 @@ class ScreenService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             autopilot2048 = false
+            geometryDashAutopilot = false
             stopSelf()
             return START_NOT_STICKY
         }
@@ -275,6 +278,18 @@ class ScreenService : Service() {
             full.recycle()
         } finally {
             img.close()
+        }
+        if (geometryDashAutopilot) {
+            val decision = geometryDashController.analyze(cropped)
+            if (decision.tap) {
+                val service = KapriAccessibilityService.instance
+                if (service == null || !service.tap(w * 0.52f, h * 0.78f)) {
+                    geometryDashAutopilot = false
+                    show("Автопилот Geometry Dash остановлен: управление недоступно.", System.currentTimeMillis())
+                }
+            }
+            cropped.recycle()
+            return
         }
         val s = min(1f, 896f / max(w, h))
         val scaled = Bitmap.createScaledBitmap(cropped, (w * s).toInt(), (h * s).toInt(), true)
@@ -522,6 +537,8 @@ class ScreenService : Service() {
         running = false
         active = false
         autopilot2048 = false
+        geometryDashAutopilot = false
+        geometryDashController.reset()
         main.removeCallbacksAndMessages(null)
         try { unregisterReceiver(powerReceiver) } catch (_: Exception) {}
         charAnim?.cancel()

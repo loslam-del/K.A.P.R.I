@@ -29,8 +29,8 @@ object Brain {
 {"action":"chat","reply":"текст ответа"} — обычный разговор или вопрос;
 {"action":"play_music","query":"исполнитель - название трека","reply":"Включаю ..."} — когда просят включить песню, трек, альбом, музыку или исполнителя;
 {"action":"open_app","app":"название приложения как на телефоне","reply":"Открываю ..."} — когда просят открыть приложение;
-{"action":"media","key":"pause","reply":"..."} — управление плеером, key: pause, play, next или previous;\n{"action":"search_google","query":"поисковая фраза","reply":"Ищу в Google..."} — открыть Google сразу с запросом;\n{"action":"search_youtube","query":"поисковая фраза","reply":"Ищу на YouTube..."} — открыть YouTube сразу с запросом;\n{"action":"autopilot2048_start","reply":"Запускаю автопилот 2048."} — включить автоматические ходы только по явной просьбе пользователя;\n{"action":"autopilot2048_stop","reply":"Останавливаю автопилот 2048."} — выключить автопилот.
-Если пользователь говорит «найди в Google», «поищи в YouTube» или «открой YouTube и найди», извлеки тему запроса и выбери соответствующее действие. Не запускай автопилот без явной команды включить автоматическую игру в 2048. Название трека пиши так, как сказал пользователь, исправляя очевидные ошибки распознавания речи."""
+{"action":"media","key":"pause","reply":"..."} — управление плеером, key: pause, play, next или previous;\n{"action":"search_google","query":"поисковая фраза","reply":"Ищу в Google..."} — открыть Google сразу с запросом;\n{"action":"search_youtube","query":"поисковая фраза","reply":"Ищу на YouTube..."} — открыть YouTube сразу с запросом;\n{"action":"autopilot2048_start","reply":"Запускаю автопилот 2048."} — включить автоматические ходы только по явной просьбе пользователя;\n{"action":"autopilot2048_stop","reply":"Останавливаю автопилот 2048."} — выключить автопилот;\n{"action":"autopilot_gd_start","reply":"Запускаю экспериментальный автопилот Geometry Dash."} — включить автопилот Geometry Dash по явной просьбе;\n{"action":"autopilot_gd_stop","reply":"Останавливаю автопилот Geometry Dash."} — выключить его.
+Если пользователь говорит «найди в Google», «поищи в YouTube» или «открой YouTube и найди», извлеки тему запроса и выбери соответствующее действие. Не запускай автопилот без явной команды. Geometry Dash — только экспериментальный режим обычного куба. Название трека пиши так, как сказал пользователь, исправляя очевидные ошибки распознавания речи."""
 
     @Synchronized
     fun process(apiKey: String, text: String): BrainAction {
@@ -128,6 +128,21 @@ object Brain {
                     }
                 }
                 "autopilot2048_stop" -> { ScreenService.autopilot2048 = false; "Автопилот 2048 остановлен." }
+                "autopilot_gd_start" -> {
+                    when {
+                        !ScreenService.active -> "Сначала запусти К.А.П.Р.И и разреши захват экрана."
+                        KapriAccessibilityService.instance == null -> "Сначала включи службу К.А.П.Р.И в настройках специальных возможностей Android."
+                        else -> {
+                            ScreenService.autopilot2048 = false
+                            ScreenService.geometryDashAutopilot = true
+                            null
+                        }
+                    }
+                }
+                "autopilot_gd_stop" -> {
+                    ScreenService.geometryDashAutopilot = false
+                    "Автопилот Geometry Dash остановлен."
+                }
                 else -> null
             }
         } catch (e: Exception) {
