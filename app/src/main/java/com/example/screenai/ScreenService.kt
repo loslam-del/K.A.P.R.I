@@ -52,6 +52,7 @@ class ScreenService : Service() {
         @Volatile var paused = false // true, пока открыт чат или голосовой помощник
         @Volatile var active = false
         @Volatile var autopilot2048 = false
+        @Volatile var geometryDashAutopilot = false
     }
 
     private var projection: MediaProjection? = null
@@ -71,6 +72,7 @@ class ScreenService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private val net = Executors.newSingleThreadExecutor()
     private val history = ArrayList<Pair<String, String>>() // (что видел, что ответил)
+    private val geometryDashController = GeometryDashAutopilot()
 
     @Volatile private var busy = false
     private var running = false
@@ -89,7 +91,7 @@ class ScreenService : Service() {
             if (!running) return
             checkSize()
             capture()
-            val baseDelay = if (autopilot2048) 2200L else intervalMs
+            val baseDelay = when { geometryDashAutopilot -> 90L; autopilot2048 -> 2200L; else -> intervalMs }
             main.postDelayed(this, max(baseDelay, retryDelayMs))
         }
     }
@@ -100,6 +102,7 @@ class ScreenService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             autopilot2048 = false
+            geometryDashAutopilot = false
             stopSelf()
             return START_NOT_STICKY
         }
@@ -263,7 +266,7 @@ class ScreenService : Service() {
 
     private fun capture() {
         if (busy || paused) return
-        val img = reader?.acquireLatestImage() ?: return // экран не менялся — кадра нет
+        val img = reader?.acquireLatestImage() ?: return // пока нет нового кадра от ImageReader
         val cropped: Bitmap
         try {
             val plane = img.planes[0]
@@ -275,6 +278,18 @@ class ScreenService : Service() {
             full.recycle()
         } finally {
             img.close()
+        }
+        if (geometryDashAutopilot) {
+            val decision = geometryDashController.analyze(cropped)
+            if (decision.tap) {
+                val service = KapriAccessibilityService.instance
+                if (service == null || !service.tap(w * 0.52f, h * 0.78f)) {
+                    geometryDashAutopilot = false
+                    show("Автопилот Geometry Dash остановлен: управление недоступно.", System.currentTimeMillis())
+                }
+            }
+            cropped.recycle()
+            return
         }
         val s = min(1f, 896f / max(w, h))
         val scaled = Bitmap.createScaledBitmap(cropped, (w * s).toInt(), (h * s).toInt(), true)
@@ -448,18 +463,21 @@ class ScreenService : Service() {
         val persona = "Тебя зовут К.А.П.Р.И — Кибер-Ассистент Принятия Решений Игрока. "
         val base = persona + when (mode) {
             0 -> "Ты игровой помощник. По скриншоту определи игру и ситуацию. " +
+                "Если это Geometry Dash, определи режим и видимые препятствия впереди (шипы, ямы, блоки, порталы), " +
+                "кратко подскажи, на что обратить внимание в ближайшем участке. Не выдумывай точный момент нажатия " +
+                "по одному статичному кадру и не обещай идеальное прохождение. Если участок неразличим или экран в меню, ответь «ок». " +
                 "Если это выбор героев (пик или бан) — назови ОДНОГО лучшего героя для пика или бана, " +
                 "учитывая уже выбранных героев обеих команд и роль игрока, и одним предложением объясни почему. " +
                 "Если это игра на логику, головоломка или настольная игра — назови ОДИН лучший следующий ход " +
-                "конкретно: что и куда сделать. Если ты не видишь на экране ни выбора героя, ни позиции, где нужен ход " +
-                "(лобби, меню, магазин, загрузка, сам бой), ответь «ок» и ничего не советуй. " +
-                "Формат: «Ход: … Почему: …». " +
-                "Если ситуация не изменилась с прошлого ответа или это не игра — ответь одним словом «ок»."
+                "конкретно: что и куда сделать. Если ты не видишь игровой ситуации, где нужен ход, ответь «ок». " +
+                "Формат: «Ход: … Почему: …». Если ситуация не изменилась или это не игра — ответь «ок»."
             1 -> "Ты игровой помощник. По скриншоту определи игру и ситуацию. " +
-                "Если на экране нет игровой ситуации, где нужно решение (лобби, меню, магазин, загрузка), ответь «ок». " +
+                "Если это Geometry Dash, предложи 2–3 короткие подсказки по видимым препятствиям и ближайшему участку. " +
+                "Не угадывай точный кадр прыжка по статичному изображению; отмечай неопределённость, если часть трассы не видна. " +
+                "Если на экране нет игровой ситуации, где нужно решение (лобби, меню, загрузка), ответь «ок». " +
                 "Иначе предложи 2–3 РАЗНЫХ способа действовать сейчас, каждый одной короткой строкой, " +
                 "с нумерацией «1.», «2.», «3.». Самый сильный вариант пометь словом «лучший». " +
-                "Если ситуация не изменилась с прошлого ответа или это не игра — ответь одним словом «ок»."
+                "Если ситуация не изменилась или это не игра — ответь одним словом «ок»."
             else -> "Я пишу код. Смотри на экран и коротко (1–3 предложения) говори только о важном: " +
                 "ошибки, баги, что можно улучшить. Если нового важного нет, ответь одним словом «ок»."
         }
@@ -519,6 +537,8 @@ class ScreenService : Service() {
         running = false
         active = false
         autopilot2048 = false
+        geometryDashAutopilot = false
+        geometryDashController.reset()
         main.removeCallbacksAndMessages(null)
         try { unregisterReceiver(powerReceiver) } catch (_: Exception) {}
         charAnim?.cancel()
