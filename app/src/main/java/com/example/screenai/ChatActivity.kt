@@ -17,6 +17,7 @@ class ChatActivity : Activity() {
     private lateinit var list: LinearLayout
     private lateinit var scroll: ScrollView
     private lateinit var input: EditText
+    private var requestInFlight = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -97,7 +98,8 @@ class ChatActivity : Activity() {
 
     private fun sendMessage() {
         val t = input.text.toString().trim()
-        if (t.isEmpty()) return
+        if (t.isEmpty() || requestInFlight) return
+        requestInFlight = true
         input.setText("")
         addBubble(t, true)
         val pending = addBubble("…", false)
@@ -109,6 +111,7 @@ class ChatActivity : Activity() {
                 BrainAction("chat", "Ошибка: ${e.message}")
             }
             runOnUiThread {
+                requestInFlight = false
                 pending.text = act.reply.ifBlank { "…" }
                 val note = Brain.execute(this, act)
                 if (note != null) addBubble(note, false)
