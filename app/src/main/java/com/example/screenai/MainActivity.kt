@@ -27,6 +27,7 @@ class MainActivity : Activity() {
     private lateinit var intervalField: EditText
     private lateinit var promptField: EditText
     private lateinit var modes: RadioGroup
+    private lateinit var assist: RadioGroup
     private val reqCapture = 1
     private val reqNotif = 2
 
@@ -52,11 +53,11 @@ class MainActivity : Activity() {
             setPadding(0, 4, 0, 0)
         })
 
-        root.addView(label("API-ключ Anthropic"))
+        root.addView(label("API-ключ Gemini"))
         keyField = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             setText(prefs.getString("key", ""))
-            hint = "sk-ant-..."
+            hint = "AIza..."
         }
         root.addView(keyField)
 
@@ -80,6 +81,14 @@ class MainActivity : Activity() {
         modes.check(100 + prefs.getInt("mode", 0))
         root.addView(modes)
 
+        root.addView(label("При зажатии на К.А.П.Р.И"))
+        assist = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        listOf("Голосовой помощник", "Чат-помощник", "Ничего не открывать").forEachIndexed { i, n ->
+            assist.addView(RadioButton(this).apply { id = 200 + i; text = n })
+        }
+        assist.check(200 + prefs.getInt("assistant", 0))
+        root.addView(assist)
+
         root.addView(label("Свои пожелания (необязательно)"))
         promptField = EditText(this).apply {
             setText(prefs.getString("extra", ""))
@@ -100,11 +109,14 @@ class MainActivity : Activity() {
 
         setContentView(ScrollView(this).apply { addView(root) })
 
+        val need = ArrayList<String>()
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), reqNotif)
+        ) need.add(Manifest.permission.POST_NOTIFICATIONS)
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            need.add(Manifest.permission.RECORD_AUDIO)
         }
+        if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), reqNotif)
 
         start.setOnClickListener {
             if (keyField.text.isBlank()) {
@@ -121,6 +133,7 @@ class MainActivity : Activity() {
                 .putString("interval", intervalField.text.toString())
                 .putString("extra", promptField.text.toString())
                 .putInt("mode", modeIndex())
+                .putInt("assistant", (assist.checkedRadioButtonId - 200).coerceIn(0, 2))
                 .apply()
             val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             startActivityForResult(mpm.createScreenCaptureIntent(), reqCapture)
