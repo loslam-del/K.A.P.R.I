@@ -39,17 +39,26 @@ class MainActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad * 2, pad, pad)
+            setBackgroundColor(Color.rgb(7, 10, 8))
         }
 
         fun label(t: String) = TextView(this).apply {
             text = t
             textSize = 13f
+            setTextColor(Color.rgb(105, 220, 135))
             setPadding(0, pad, 0, 4)
         }
 
-        root.addView(TextView(this).apply { text = "К.А.П.Р.И"; textSize = 28f })
+        root.addView(TextView(this).apply {
+            text = "К.А.П.Р.И"
+            textSize = 30f
+            setTextColor(Color.rgb(255, 75, 82))
+            setTypeface(typeface, Typeface.BOLD)
+            letterSpacing = 0.08f
+        })
         root.addView(TextView(this).apply {
             text = "Кибер-Ассистент Принятия Решений Игрока\nПодсказки появляются поверх любого приложения."
+            setTextColor(Color.rgb(190, 205, 192))
             setPadding(0, 4, 0, 0)
         })
 
@@ -58,6 +67,9 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             setText(prefs.getString("key", ""))
             hint = "AIza..."
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            background = fieldBackground()
         }
         root.addView(keyField)
 
@@ -65,6 +77,9 @@ class MainActivity : Activity() {
         intervalField = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER
             setText(prefs.getString("interval", "5"))
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            background = fieldBackground()
         }
         root.addView(intervalField)
 
@@ -76,7 +91,12 @@ class MainActivity : Activity() {
             "Помощь с кодом"
         )
         names.forEachIndexed { i, n ->
-            modes.addView(RadioButton(this).apply { id = 100 + i; text = n })
+            modes.addView(RadioButton(this).apply {
+                id = 100 + i
+                text = n
+                setTextColor(Color.rgb(225, 235, 226))
+                buttonTintList = android.content.res.ColorStateList.valueOf(Color.rgb(70, 205, 110))
+            })
         }
         modes.check(100 + prefs.getInt("mode", 0))
         root.addView(modes)
@@ -84,7 +104,12 @@ class MainActivity : Activity() {
         root.addView(label("При зажатии на К.А.П.Р.И"))
         assist = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
         listOf("Голосовой помощник", "Чат-помощник", "Ничего не открывать").forEachIndexed { i, n ->
-            assist.addView(RadioButton(this).apply { id = 200 + i; text = n })
+            assist.addView(RadioButton(this).apply {
+                id = 200 + i
+                text = n
+                setTextColor(Color.rgb(225, 235, 226))
+                buttonTintList = android.content.res.ColorStateList.valueOf(Color.rgb(70, 205, 110))
+            })
         }
         assist.check(200 + prefs.getInt("assistant", 0))
         root.addView(assist)
@@ -93,11 +118,16 @@ class MainActivity : Activity() {
         promptField = EditText(this).apply {
             setText(prefs.getString("extra", ""))
             hint = "Например: я играю за Радиант, ранг Бог"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            background = fieldBackground()
         }
         root.addView(promptField)
 
         val accessibility = Button(this).apply {
             text = "Настроить автопилот 2048"
+            setTextColor(Color.rgb(110, 230, 145))
+            background = buttonBackground(Color.rgb(18, 25, 20), Color.rgb(55, 190, 95))
             setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         }
         root.addView(accessibility, LinearLayout.LayoutParams(
@@ -107,10 +137,17 @@ class MainActivity : Activity() {
         root.addView(TextView(this).apply {
             text = "Для автопилота отдельно включи службу «К.А.П.Р.И — управление экраном» в настройках специальных возможностей. Автопилот запускается только голосовой командой и останавливается командой «Капри, останови автопилот»."
             textSize = 12f
+            setTextColor(Color.rgb(165, 180, 168))
             setPadding(0, 4, 0, pad)
         })
 
-        val start = Button(this).apply { text = "Начать" }
+        val start = Button(this).apply {
+            text = "НАЧАТЬ"
+            textSize = 16f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.rgb(5, 18, 9))
+            background = buttonBackground(Color.rgb(65, 220, 112), Color.rgb(65, 220, 112))
+        }
         root.addView(start, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = pad })
@@ -118,10 +155,17 @@ class MainActivity : Activity() {
         root.addView(TextView(this).apply {
             text = "Остановить: кнопка «Стоп» в уведомлении."
             textSize = 13f
+            setTextColor(Color.rgb(165, 180, 168))
             setPadding(0, pad, 0, 0)
         })
 
-        setContentView(ScrollView(this).apply { addView(root) })
+        setContentView(ScrollView(this).apply {
+            setBackgroundColor(Color.rgb(7, 10, 8))
+            addView(root)
+        })
+        root.alpha = 0f
+        root.translationY = 22f
+        root.animate().alpha(1f).translationY(0f).setDuration(420).start()
 
         val need = ArrayList<String>()
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -152,6 +196,18 @@ class MainActivity : Activity() {
             val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             startActivityForResult(mpm.createScreenCaptureIntent(), reqCapture)
         }
+    }
+
+    private fun fieldBackground() = GradientDrawable().apply {
+        setColor(Color.rgb(20, 25, 21))
+        cornerRadius = 14 * resources.displayMetrics.density
+        setStroke((1 * resources.displayMetrics.density).toInt(), Color.rgb(50, 105, 65))
+    }
+
+    private fun buttonBackground(fill: Int, stroke: Int) = GradientDrawable().apply {
+        setColor(fill)
+        cornerRadius = 16 * resources.displayMetrics.density
+        setStroke((1.5f * resources.displayMetrics.density).toInt(), stroke)
     }
 
     private fun modeIndex() = (modes.checkedRadioButtonId - 100).coerceIn(0, 2)
