@@ -46,15 +46,16 @@ class ScreenService : Service() {
 
     companion object {
         const val ACTION_STOP = "com.example.screenai.STOP"
-        val MODELS = listOf("gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3-flash-preview")
+        val MODELS = listOf("gemini-2.5-flash-lite", "gemini-flash-lite-latest", "gemini-2.5-flash", "gemini-3-flash-preview")
         const val CHANNEL = "screenai"
         const val CHAR_DP = 90 // размер героини на экране, можно менять
+        @Volatile var paused = false // true, пока открыт чат или голосовой помощник
     }
 
     private var projection: MediaProjection? = null
     private var reader: ImageReader? = null
     private var display: VirtualDisplay? = null
-    private var overlayRoot: LinearLayout? = null
+    private var bubbleLp: WindowManager.LayoutParams? = null
     private var charView: ImageView? = null
     private var bubble: TextView? = null
     private var charAnim: ObjectAnimator? = null
@@ -169,29 +170,40 @@ class ScreenService : Service() {
 
     private fun addOverlay() {
         val d = resources.displayMetrics.density
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.TOP
-        }
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val charW = (CHAR_DP * d).toInt()
+
+        // окно героини: на него можно нажимать, зажатие открывает помощника
         val img = ImageView(this).apply {
             setImageResource(R.drawable.kapri_idle)
             adjustViewBounds = true
             scaleType = ImageView.ScaleType.FIT_CENTER
+            setOnLongClickListener { openAssistant(); true }
         }
-        row.addView(img, LinearLayout.LayoutParams((CHAR_DP * d).toInt(), LinearLayout.LayoutParams.WRAP_CONTENT))
+        val lpImg = WindowManager.LayoutParams(
+            charW,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = (30 * d).toInt()
+        }
+        wm.addView(img, lpImg)
+        charView = img
+
+        // окно с текстом: нажатия проходят сквозь него в игру
         val tv = TextView(this).apply {
             setBackgroundResource(R.drawable.kapri_frame)
             setTextColor(0xFFFFFFFF.toInt())
             textSize = 14f
             visibility = android.view.View.GONE
         }
-        row.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            marginStart = (4 * d).toInt()
-            marginEnd = (4 * d).toInt()
-        })
-        val lp = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
+        val lpTv = WindowManager.LayoutParams(
+            100,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -199,13 +211,33 @@ class ScreenService : Service() {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP
-            y = (30 * d).toInt()
+            gravity = Gravity.TOP or Gravity.START
+            y = (45 * d).toInt()
         }
-        (getSystemService(Context.WINDOW_SERVICE) as WindowManager).addView(row, lp)
-        overlayRoot = row
-        charView = img
+        bubbleLp = lpTv
+        wm.addView(tv, lpTv)
         bubble = tv
+        layoutBubble()
+    }
+
+    private fun layoutBubble() {
+        val lp = bubbleLp ?: return
+        val v = bubble ?: return
+        val d = resources.displayMetrics.density
+        lp.x = (CHAR_DP * d).toInt() + (4 * d).toInt()
+        lp.width = max(100, w - lp.x - (6 * d).toInt())
+        try {
+            (getSystemService(Context.WINDOW_SERVICE) as WindowManager).updateViewLayout(v, lp)
+        } catch (_: Exception) {}
+    }
+
+    private fun openAssistant() {
+        val kind = getSharedPreferences("cfg", Context.MODE_PRIVATE).getInt("assistant", 0)
+        if (kind == 2) return
+        val cls = if (kind == 0) VoiceActivity::class.java else ChatActivity::class.java
+        try {
+            startActivity(Intent(this, cls).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) {}
     }
 
     @Suppress("DEPRECATION")
@@ -220,10 +252,11 @@ class ScreenService : Service() {
         display?.setSurface(newReader.surface)
         reader?.close()
         reader = newReader
+        layoutBubble()
     }
 
     private fun capture() {
-        if (busy) return
+        if (busy || paused) return
         val img = reader?.acquireLatestImage() ?: return // экран не менялся — кадра нет
         val cropped: Bitmap
         try {
@@ -237,10 +270,10 @@ class ScreenService : Service() {
         } finally {
             img.close()
         }
-        val s = min(1f, 1568f / max(w, h))
+        val s = min(1f, 896f / max(w, h))
         val scaled = Bitmap.createScaledBitmap(cropped, (w * s).toInt(), (h * s).toInt(), true)
         val out = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
+        scaled.compress(Bitmap.CompressFormat.JPEG, 60, out)
         val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 
         val t0 = System.currentTimeMillis()
@@ -256,7 +289,7 @@ class ScreenService : Service() {
 
     private fun askClaude(b64: String): String {
         val contents = JSONArray()
-        for ((u, a) in history.takeLast(3)) {
+        for ((u, a) in history.takeLast(2)) {
             contents.put(JSONObject().put("role", "user")
                 .put("parts", JSONArray().put(JSONObject().put("text", u))))
             contents.put(JSONObject().put("role", "model")
@@ -276,6 +309,7 @@ class ScreenService : Service() {
 
         for (i in modelIdx until MODELS.size) {
             val url = "https://generativelanguage.googleapis.com/v1beta/models/${MODELS[i]}:generateContent"
+            body.put("generationConfig", genConfig(MODELS[i]))
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.connectTimeout = 15000
@@ -287,7 +321,7 @@ class ScreenService : Service() {
 
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream.bufferedReader().use { it.readText() }
+            val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
             if ((code == 404 || code == 429 || code == 503) && i < MODELS.size - 1) continue
 
             val json = JSONObject(text)
@@ -309,6 +343,12 @@ class ScreenService : Service() {
             return reply
         }
         throw RuntimeException("модель Gemini не найдена, проверь ключ")
+    }
+
+    private fun genConfig(model: String): JSONObject {
+        val c = JSONObject().put("maxOutputTokens", 300)
+        if (model.contains("2.5")) c.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+        return c
     }
 
     private fun systemPrompt(): String {
@@ -388,7 +428,9 @@ class ScreenService : Service() {
         try { unregisterReceiver(powerReceiver) } catch (_: Exception) {}
         charAnim?.cancel()
         try { player?.release() } catch (_: Exception) {}
-        try { overlayRoot?.let { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(it) } } catch (_: Exception) {}
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        try { charView?.let { wm.removeView(it) } } catch (_: Exception) {}
+        try { bubble?.let { wm.removeView(it) } } catch (_: Exception) {}
         display?.release()
         reader?.close()
         try { projection?.stop() } catch (_: Exception) {}
