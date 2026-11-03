@@ -60,7 +60,7 @@ class MainActivity : Activity() {
             letterSpacing = 0.08f
         })
         root.addView(TextView(this).apply {
-            text = "Кибер-Ассистент Принятия Решений Игрока\nПодсказки появляются поверх любого приложения."
+            text = "Кибер-Ассистент Принятия Решений Игрока\nПодсказки появляются поверх любого приложения, в том числе Geometry Dash."
             setTextColor(Color.rgb(190, 205, 192))
             setPadding(0, 4, 0, 0)
         })
@@ -156,7 +156,7 @@ class MainActivity : Activity() {
         ).apply { topMargin = pad })
 
         root.addView(TextView(this).apply {
-            text = "Остановить: кнопка «Стоп» в уведомлении."
+            text = "Захват экрана работает в активном сеансе после твоего подтверждения Android. Он не постоянный навсегда: останови его кнопкой «Стоп» в уведомлении; Android также может отозвать доступ. Для Geometry Dash выбери режим подсказок и интервал 2–3 секунды."
             textSize = 13f
             setTextColor(Color.rgb(165, 180, 168))
             setPadding(0, pad, 0, 0)
