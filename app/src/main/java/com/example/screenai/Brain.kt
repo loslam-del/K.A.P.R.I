@@ -32,6 +32,7 @@ object Brain {
 {"action":"media","key":"pause","reply":"..."} — управление плеером, key: pause, play, next или previous;\n{"action":"search_google","query":"поисковая фраза","reply":"Ищу в Google..."} — открыть Google сразу с запросом;\n{"action":"search_youtube","query":"поисковая фраза","reply":"Ищу на YouTube..."} — открыть YouTube сразу с запросом;\n{"action":"autopilot2048_start","reply":"Запускаю автопилот 2048."} — включить автоматические ходы только по явной просьбе пользователя;\n{"action":"autopilot2048_stop","reply":"Останавливаю автопилот 2048."} — выключить автопилот.
 Если пользователь говорит «найди в Google», «поищи в YouTube» или «открой YouTube и найди», извлеки тему запроса и выбери соответствующее действие. Не запускай автопилот без явной команды включить автоматическую игру в 2048. Название трека пиши так, как сказал пользователь, исправляя очевидные ошибки распознавания речи."""
 
+    @Synchronized
     fun process(apiKey: String, text: String): BrainAction {
         val contents = JSONArray()
         for ((u, a) in history.takeLast(6)) {
@@ -52,7 +53,7 @@ object Brain {
         for (i in modelIdx until models.size) {
             val model = models[i]
             val cfg = JSONObject()
-                .put("maxOutputTokens", 400)
+                .put("maxOutputTokens", 260)
                 .put("responseMimeType", "application/json")
             if (model.contains("2.5")) cfg.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
             body.put("generationConfig", cfg)
@@ -60,8 +61,8 @@ object Brain {
             val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
-            conn.connectTimeout = 15000
-            conn.readTimeout = 60000
+            conn.connectTimeout = 6000
+            conn.readTimeout = 15000
             conn.doOutput = true
             conn.setRequestProperty("content-type", "application/json")
             conn.setRequestProperty("x-goog-api-key", apiKey)
@@ -70,7 +71,7 @@ object Brain {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val resp = stream?.bufferedReader()?.use { it.readText() } ?: ""
-            if ((code == 404 || code == 429 || code == 503) && i < models.size - 1) continue
+            if (code == 404 && i < models.size - 1) continue
 
             val json = JSONObject(resp)
             if (code !in 200..299) {

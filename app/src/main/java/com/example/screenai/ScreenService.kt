@@ -79,6 +79,7 @@ class ScreenService : Service() {
     private var mode = 0
     private var modelIdx = 0
     private var intervalMs = 5000L
+    @Volatile private var retryDelayMs = 0L
     private var w = 0
     private var h = 0
     private var dpi = 0
@@ -88,7 +89,8 @@ class ScreenService : Service() {
             if (!running) return
             checkSize()
             capture()
-            main.postDelayed(this, if (autopilot2048) 2200L else intervalMs)
+            val baseDelay = if (autopilot2048) 2200L else intervalMs
+            main.postDelayed(this, max(baseDelay, retryDelayMs))
         }
     }
 
@@ -291,6 +293,7 @@ class ScreenService : Service() {
             }
             main.post {
                 busy = false
+                retryDelayMs = if (result.first.startsWith("Ошибка:")) 8000L else 0L
                 if (autoMode && autopilot2048 && result.second != null) {
                     val service = KapriAccessibilityService.instance
                     if (service == null) {
@@ -338,8 +341,8 @@ class ScreenService : Service() {
             val url = "https://generativelanguage.googleapis.com/v1beta/models/${MODELS[i]}:generateContent"
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
-            conn.connectTimeout = 15000
-            conn.readTimeout = 60000
+            conn.connectTimeout = 6000
+            conn.readTimeout = 15000
             conn.doOutput = true
             conn.setRequestProperty("content-type", "application/json")
             conn.setRequestProperty("x-goog-api-key", apiKey)
@@ -348,7 +351,7 @@ class ScreenService : Service() {
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val response = stream?.bufferedReader()?.use { it.readText() } ?: ""
-            if ((code == 404 || code == 429 || code == 503) && i < MODELS.size - 1) continue
+            if (code == 404 && i < MODELS.size - 1) continue
             val json = JSONObject(response)
             if (code !in 200..299) {
                 throw RuntimeException(json.optJSONObject("error")?.optString("message") ?: "HTTP $code")
