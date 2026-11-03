@@ -96,6 +96,20 @@ class MainActivity : Activity() {
         }
         root.addView(promptField)
 
+        val accessibility = Button(this).apply {
+            text = "Настроить автопилот 2048"
+            setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        }
+        root.addView(accessibility, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = pad })
+
+        root.addView(TextView(this).apply {
+            text = "Для автопилота отдельно включи службу «К.А.П.Р.И — управление экраном» в настройках специальных возможностей. Автопилот запускается только голосовой командой и останавливается командой «Капри, останови автопилот»."
+            textSize = 12f
+            setPadding(0, 4, 0, pad)
+        })
+
         val start = Button(this).apply { text = "Начать" }
         root.addView(start, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT

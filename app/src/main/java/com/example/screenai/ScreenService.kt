@@ -50,6 +50,8 @@ class ScreenService : Service() {
         const val CHANNEL = "screenai"
         const val CHAR_DP = 90 // размер героини на экране, можно менять
         @Volatile var paused = false // true, пока открыт чат или голосовой помощник
+        @Volatile var active = false
+        @Volatile var autopilot2048 = false
     }
 
     private var projection: MediaProjection? = null
@@ -86,7 +88,7 @@ class ScreenService : Service() {
             if (!running) return
             checkSize()
             capture()
-            main.postDelayed(this, intervalMs)
+            main.postDelayed(this, if (autopilot2048) 2200L else intervalMs)
         }
     }
 
@@ -95,6 +97,7 @@ class ScreenService : Service() {
     @Suppress("DEPRECATION")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            autopilot2048 = false
             stopSelf()
             return START_NOT_STICKY
         }
@@ -138,6 +141,7 @@ class ScreenService : Service() {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(powerReceiver, filter, Context.RECEIVER_EXPORTED)
             else registerReceiver(powerReceiver, filter)
             running = true
+            active = true
             main.postDelayed(tick, 1500)
         } catch (e: Exception) {
             stopSelf()
@@ -278,13 +282,99 @@ class ScreenService : Service() {
 
         val t0 = System.currentTimeMillis()
         busy = true
+        val autoMode = autopilot2048
         net.execute {
-            val reply = try { askClaude(b64) } catch (e: Exception) { "Ошибка: ${e.message}" }
+            val result = try {
+                if (autoMode) read2048Move(b64) else (askClaude(b64) to null)
+            } catch (e: Exception) {
+                ("Ошибка: ${e.message}" to null)
+            }
             main.post {
                 busy = false
-                show(reply, t0)
+                if (autoMode && autopilot2048 && result.second != null) {
+                    val service = KapriAccessibilityService.instance
+                    if (service == null) {
+                        autopilot2048 = false
+                        show("Автопилот остановлен: включи службу специальных возможностей К.А.П.Р.И.", t0)
+                    } else {
+                        val sent = service.swipeDir(result.second!!, w, h)
+                        show(if (sent) "2048: ход ${directionRu(result.second!!)}" else "Не удалось выполнить свайп. Проверь разрешение службы.", t0)
+                    }
+                } else {
+                    show(result.first, t0)
+                }
             }
         }
+    }
+
+    private fun directionRu(direction: String): String = when (direction) {
+        "left" -> "влево"
+        "right" -> "вправо"
+        "up" -> "вверх"
+        else -> "вниз"
+    }
+
+    /** Просит Gemini распознать только игровое поле 2048; ход выбирается локальным решателем. */
+    private fun read2048Move(b64: String): Pair<String, String?> {
+        val promptText = "Определи, показана ли на изображении классическая игра 2048 с полем 4 на 4. " +
+            "Если да, верни строго JSON вида {\"board\":[[0,2,0,4],[0,0,2,0],[4,0,0,0],[0,0,0,2]]}. " +
+            "Числа должны быть точными значениями плиток, пустые клетки обозначай 0. " +
+            "Если это не экран игры 2048 или поле нельзя уверенно прочитать, верни {\"board\":null}. " +
+            "Игнорируй плавающий значок помощника и текст поверх экрана."
+        val parts = JSONArray()
+            .put(JSONObject().put("inlineData", JSONObject().put("mimeType", "image/jpeg").put("data", b64)))
+            .put(JSONObject().put("text", promptText))
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
+
+        for (i in modelIdx until MODELS.size) {
+            body.put("generationConfig", JSONObject()
+                .put("maxOutputTokens", 180)
+                .put("responseMimeType", "application/json"))
+            if (MODELS[i].contains("2.5")) {
+                body.getJSONObject("generationConfig")
+                    .put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+            }
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/${MODELS[i]}:generateContent"
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 15000
+            conn.readTimeout = 60000
+            conn.doOutput = true
+            conn.setRequestProperty("content-type", "application/json")
+            conn.setRequestProperty("x-goog-api-key", apiKey)
+            conn.outputStream.use { it.write(body.toString().toByteArray()) }
+
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            if ((code == 404 || code == 429 || code == 503) && i < MODELS.size - 1) continue
+            val json = JSONObject(response)
+            if (code !in 200..299) {
+                throw RuntimeException(json.optJSONObject("error")?.optString("message") ?: "HTTP $code")
+            }
+            modelIdx = i
+            val raw = json.optJSONArray("candidates")?.optJSONObject(0)
+                ?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)?.optString("text").orEmpty()
+            val start = raw.indexOf('{')
+            val end = raw.lastIndexOf('}')
+            if (start < 0 || end <= start) return "Не удалось прочитать поле 2048." to null
+            val parsed = JSONObject(raw.substring(start, end + 1))
+            val rows = parsed.optJSONArray("board")
+                ?: return "Поле 2048 пока не распознано — жду следующий кадр." to null
+            if (rows.length() != 4) return "Не удалось уверенно прочитать поле 2048." to null
+            val board = Array(4) { IntArray(4) }
+            for (r in 0 until 4) {
+                val row = rows.optJSONArray(r)
+                    ?: return "Не удалось прочитать строку поля 2048." to null
+                if (row.length() != 4) return "Не удалось прочитать поле 2048." to null
+                for (col in 0 until 4) board[r][col] = row.optInt(col, -1)
+            }
+            val direction = Game2048.bestMove(board)
+                ?: return "В 2048 сейчас нет доступных ходов." to null
+            return "2048: выбран ход ${directionRu(direction)}." to direction
+        }
+        throw RuntimeException("Не удалось выбрать модель Gemini.")
     }
 
     private fun askClaude(b64: String): String {
@@ -424,6 +514,8 @@ class ScreenService : Service() {
 
     override fun onDestroy() {
         running = false
+        active = false
+        autopilot2048 = false
         main.removeCallbacksAndMessages(null)
         try { unregisterReceiver(powerReceiver) } catch (_: Exception) {}
         charAnim?.cancel()
