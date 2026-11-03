@@ -317,7 +317,7 @@ class ScreenService : Service() {
     /** Просит Gemini распознать только игровое поле 2048; ход выбирается локальным решателем. */
     private fun read2048Move(b64: String): Pair<String, String?> {
         val promptText = "Определи, показана ли на изображении классическая игра 2048 с полем 4 на 4. " +
-            "Если да, верни строго JSON вида {\"board\":[[0,2,0,4],[...],[...],[...]]}. " +
+            "Если да, верни строго JSON вида {\"board\":[[0,2,0,4],[0,0,2,0],[4,0,0,0],[0,0,0,2]]}. " +
             "Числа должны быть точными значениями плиток, пустые клетки обозначай 0. " +
             "Если это не экран игры 2048 или поле нельзя уверенно прочитать, верни {\"board\":null}. " +
             "Игнорируй плавающий значок помощника и текст поверх экрана."
@@ -363,10 +363,12 @@ class ScreenService : Service() {
             val rows = parsed.optJSONArray("board")
                 ?: return "Поле 2048 пока не распознано — жду следующий кадр." to null
             if (rows.length() != 4) return "Не удалось уверенно прочитать поле 2048." to null
-            val board = Array(4) { r ->
-                val row = rows.optJSONArray(r) ?: return "Не удалось прочитать строку поля 2048." to null
+            val board = Array(4) { IntArray(4) }
+            for (r in 0 until 4) {
+                val row = rows.optJSONArray(r)
+                    ?: return "Не удалось прочитать строку поля 2048." to null
                 if (row.length() != 4) return "Не удалось прочитать поле 2048." to null
-                IntArray(4) { col -> row.optInt(col, -1) }
+                for (col in 0 until 4) board[r][col] = row.optInt(col, -1)
             }
             val direction = Game2048.bestMove(board)
                 ?: return "В 2048 сейчас нет доступных ходов." to null
