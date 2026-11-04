@@ -1,21 +1,59 @@
 name: Build APK
+
 on:
   push:
+  pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *"
+
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      KAPRI_KEYSTORE_BASE64: ${{ secrets.KAPRI_KEYSTORE_BASE64 }}
+      KAPRI_KEYSTORE_PASSWORD: ${{ secrets.KAPRI_KEYSTORE_PASSWORD }}
+      KAPRI_KEY_ALIAS: ${{ secrets.KAPRI_KEY_ALIAS }}
+      KAPRI_KEY_PASSWORD: ${{ secrets.KAPRI_KEY_PASSWORD }}
+      KAPRI_VERSION_CODE: ${{ vars.KAPRI_VERSION_CODE || '1' }}
+      KAPRI_VERSION_NAME: ${{ vars.KAPRI_VERSION_NAME || '1.0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.7
-      - run: gradle assembleDebug --no-daemon
-      - uses: actions/upload-artifact@v4
+          gradle-version: "8.7"
+      - name: Configure persistent release signing
+        if: ${{ env.KAPRI_KEYSTORE_BASE64 != '' && env.KAPRI_KEYSTORE_PASSWORD != '' && env.KAPRI_KEY_ALIAS != '' && env.KAPRI_KEY_PASSWORD != '' }}
+        shell: bash
+        run: |
+          echo "$KAPRI_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/kapri-release.jks"
+          echo "KAPRI_KEYSTORE_PATH=$RUNNER_TEMP/kapri-release.jks" >> "$GITHUB_ENV"
+      - name: Build signed release APK
+        if: ${{ env.KAPRI_KEYSTORE_BASE64 != '' && env.KAPRI_KEYSTORE_PASSWORD != '' && env.KAPRI_KEY_ALIAS != '' && env.KAPRI_KEY_PASSWORD != '' }}
+        run: gradle testDebugUnitTest assembleRelease --no-daemon
+      - name: Build debug APK (signing secrets not configured)
+        if: ${{ env.KAPRI_KEYSTORE_BASE64 == '' || env.KAPRI_KEYSTORE_PASSWORD == '' || env.KAPRI_KEY_ALIAS == '' || env.KAPRI_KEY_PASSWORD == '' }}
+        run: gradle testDebugUnitTest assembleDebug --no-daemon
+      - name: Upload signed release APK
+        if: ${{ env.KAPRI_KEYSTORE_BASE64 != '' && env.KAPRI_KEYSTORE_PASSWORD != '' && env.KAPRI_KEY_ALIAS != '' && env.KAPRI_KEY_PASSWORD != '' }}
+        uses: actions/upload-artifact@v4
         with:
-          name: KAPRI-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: KAPRI-apk-release
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload debug APK
+        if: ${{ env.KAPRI_KEYSTORE_BASE64 == '' || env.KAPRI_KEYSTORE_PASSWORD == '' || env.KAPRI_KEY_ALIAS == '' || env.KAPRI_KEY_PASSWORD == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAPRI-apk-debug-only
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
