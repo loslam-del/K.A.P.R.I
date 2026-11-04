@@ -3,7 +3,11 @@ package com.example.screenai
 import android.graphics.Bitmap
 import kotlin.math.max
 
-/** Experimental predictive controller for Geometry Dash's classic cube mode. */
+/**
+ * Experimental Geometry Dash controller.
+ * Uses a simple parabolic jump model to estimate whether the cube will be
+ * high enough while crossing the detected obstacle cluster.
+ */
 class GeometryDashAutopilot {
     private var previousObstacleX = -1f
     private var previousFrameAt = 0L
@@ -14,6 +18,15 @@ class GeometryDashAutopilot {
 
     data class Decision(val tap: Boolean, val status: String)
 
+    companion object {
+        private const val PLAYER_X = 0.40f
+        private const val JUMP_DURATION_MS = 680f
+        private const val JUMP_TRIGGER_MIN_MS = 165f
+        private const val JUMP_TRIGGER_MAX_MS = 255f
+        private const val MIN_ARC_CLEARANCE = 0.34f
+        private const val TAP_COOLDOWN_MS = 520L
+    }
+
     fun reset() {
         previousObstacleX = -1f
         previousFrameAt = 0L
@@ -21,6 +34,12 @@ class GeometryDashAutopilot {
         armed = true
         stableFrames = 0
         estimatedVelocity = 0f
+    }
+
+    /** Normalized height of a parabolic jump: 0 at takeoff/landing, 1 at apex. */
+    private fun arcHeight(elapsedMs: Float): Float {
+        val t = (elapsedMs / JUMP_DURATION_MS).coerceIn(0f, 1f)
+        return 4f * t * (1f - t)
     }
 
     fun analyze(frame: Bitmap, now: Long = System.currentTimeMillis()): Decision {
@@ -53,7 +72,7 @@ class GeometryDashAutopilot {
             x += stepX
         }
 
-        // Select a compact run of bright neutral pixels, not a single noisy column.
+        // Find the strongest compact obstacle cluster and retain its width.
         var bestStart = -1
         var bestEnd = -1
         var bestScore = 0
@@ -64,7 +83,7 @@ class GeometryDashAutopilot {
             var score = 0
             while (i < counts.size && counts[i] >= 2) { score += counts[i]; i++ }
             val span = i - start
-            if (span in 2..70 && score > bestScore) {
+            if (span in 2..90 && score > bestScore) {
                 bestScore = score
                 bestStart = start
                 bestEnd = i - 1
@@ -83,6 +102,7 @@ class GeometryDashAutopilot {
 
         val centerIndex = (bestStart + bestEnd) / 2f
         val obstacleX = (xStart + centerIndex * stepX) / width.toFloat()
+        val halfWidth = ((bestEnd - bestStart + 1) * stepX / 2f) / width.toFloat()
         stableFrames++
 
         val oldX = previousObstacleX
@@ -97,20 +117,37 @@ class GeometryDashAutopilot {
         previousObstacleX = obstacleX
         previousFrameAt = now
 
-        if (obstacleX < 0.37f) armed = true
-        val movingTowardPlayer = estimatedVelocity < -0.00005f &&
-            (oldX < 0f || obstacleX <= oldX + 0.012f)
+        if (obstacleX + halfWidth < PLAYER_X - 0.025f) armed = true
+        val speed = -estimatedVelocity
+        if (speed <= 0.00005f) return Decision(false, "Отслеживаю препятствие")
 
-        // Predict 170 ms ahead to account for capture and tap-dispatch latency.
-        val predictedX = obstacleX + estimatedVelocity * 170f
-        val inJumpWindow = predictedX <= 0.51f && predictedX >= 0.34f
-        val cooldownPassed = now - lastTapAt > 520L
+        // Estimate when the near and far edges reach the player.
+        val nearDistance = (obstacleX - halfWidth - PLAYER_X).coerceAtLeast(0f)
+        val farDistance = (obstacleX + halfWidth - PLAYER_X).coerceAtLeast(0f)
+        val nearMs = nearDistance / speed
+        val farMs = farDistance / speed
 
-        if (stableFrames >= 2 && movingTowardPlayer && inJumpWindow && armed && cooldownPassed) {
+        // A tap is sent only when the predicted parabolic arc clears the
+        // obstacle's full detected width, not just its center.
+        val arcClearsNearEdge = arcHeight(nearMs) >= MIN_ARC_CLEARANCE
+        val arcClearsFarEdge = arcHeight(farMs) >= MIN_ARC_CLEARANCE
+        val goodTakeoffWindow = nearMs in JUMP_TRIGGER_MIN_MS..JUMP_TRIGGER_MAX_MS
+        val crossingFitsArc = farMs <= JUMP_DURATION_MS - 70f
+
+        if (stableFrames >= 2 && armed && goodTakeoffWindow &&
+            crossingFitsArc && arcClearsNearEdge && arcClearsFarEdge &&
+            now - lastTapAt > TAP_COOLDOWN_MS) {
             armed = false
             lastTapAt = now
-            return Decision(true, "Прогноз столкновения — прыжок")
+            return Decision(true, "Дуга рассчитана — прыжок")
         }
-        return Decision(false, if (estimatedVelocity < 0f) "Траектория рассчитана" else "Отслеживаю препятствие")
+
+        val status = when {
+            !armed -> "Кубик в прыжке / жду новое препятствие"
+            nearMs > JUMP_TRIGGER_MAX_MS -> "Рассчитываю дугу прыжка"
+            !crossingFitsArc -> "Препятствие шире расчётной дуги"
+            else -> "Проверяю высоту дуги"
+        }
+        return Decision(false, status)
     }
 }
