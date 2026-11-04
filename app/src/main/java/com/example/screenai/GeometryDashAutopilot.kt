@@ -3,150 +3,167 @@ package com.example.screenai
 import android.graphics.Bitmap
 import kotlin.math.max
 
-/**
- * Experimental Geometry Dash controller.
- * Uses a simple parabolic jump model to estimate whether the cube will be
- * high enough while crossing the detected obstacle cluster.
- */
+/** Screen-only Geometry Dash controller inspired by occupancy-grid agents. */
 class GeometryDashAutopilot {
+    private data class Obstacle(val left: Float, val right: Float, val score: Int) {
+        val center: Float get() = (left + right) * 0.5f
+    }
+
     private var previousObstacleX = -1f
     private var previousFrameAt = 0L
+    private var estimatedVelocity = 0f
     private var lastTapAt = 0L
+    private var airborneUntil = 0L
     private var armed = true
     private var stableFrames = 0
-    private var estimatedVelocity = 0f
+    private var lastGridHazards = 0
 
     data class Decision(val tap: Boolean, val status: String)
 
     companion object {
+        private const val COLS = 24
+        private const val ROWS = 16
         private const val PLAYER_X = 0.40f
-        private const val JUMP_DURATION_MS = 680f
-        private const val JUMP_TRIGGER_MIN_MS = 165f
-        private const val JUMP_TRIGGER_MAX_MS = 255f
-        private const val MIN_ARC_CLEARANCE = 0.34f
-        private const val TAP_COOLDOWN_MS = 520L
+        private const val JUMP_MS = 680f
+        private const val TAKEOFF_MIN_MS = 270f
+        private const val TAKEOFF_MAX_MS = 430f
+        private const val MIN_CLEARANCE = 0.28f
+        private const val COOLDOWN_MS = 480L
+        private const val AIRBORNE_GUARD_MS = 560L
     }
 
     fun reset() {
         previousObstacleX = -1f
         previousFrameAt = 0L
+        estimatedVelocity = 0f
         lastTapAt = 0L
+        airborneUntil = 0L
         armed = true
         stableFrames = 0
-        estimatedVelocity = 0f
+        lastGridHazards = 0
     }
 
-    /** Normalized height of a parabolic jump: 0 at takeoff/landing, 1 at apex. */
-    private fun arcHeight(elapsedMs: Float): Float {
-        val t = (elapsedMs / JUMP_DURATION_MS).coerceIn(0f, 1f)
+    private fun arcHeight(ms: Float): Float {
+        val t = (ms / JUMP_MS).coerceIn(0f, 1f)
         return 4f * t * (1f - t)
     }
 
-    fun analyze(frame: Bitmap, now: Long = System.currentTimeMillis()): Decision {
-        val width = frame.width
-        val height = frame.height
-        if (width < 200 || height < 200) return Decision(false, "Кадр слишком маленький")
-
-        val xStart = (width * 0.25f).toInt()
-        val xEnd = (width * 0.88f).toInt()
-        val yStart = (height * 0.59f).toInt()
-        val yEnd = (height * 0.73f).toInt()
-        val stepX = max(1, width / 500)
-        val stepY = max(1, height / 260)
-        val counts = IntArray((xEnd - xStart + stepX - 1) / stepX)
-        var xi = 0
-        var x = xStart
-        while (x < xEnd && xi < counts.size) {
-            var y = yStart
-            while (y < yEnd) {
-                val color = frame.getPixel(x, y)
-                val r = (color shr 16) and 255
-                val g = (color shr 8) and 255
-                val b = color and 255
-                val hi = max(r, max(g, b))
-                val lo = minOf(r, g, b)
-                if (hi > 190 && lo > 135 && hi - lo < 100) counts[xi]++
-                y += stepY
+    /** A compact 24x16 look-ahead occupancy grid from screen pixels. */
+    private fun buildGrid(frame: Bitmap): Array<IntArray> {
+        val grid = Array(ROWS) { IntArray(COLS) }
+        val x0 = (frame.width * 0.22f).toInt()
+        val x1 = (frame.width * 0.92f).toInt()
+        val y0 = (frame.height * 0.38f).toInt()
+        val y1 = (frame.height * 0.76f).toInt()
+        for (row in 0 until ROWS) {
+            val y = y0 + ((row + 0.5f) * (y1 - y0) / ROWS).toInt()
+            for (col in 0 until COLS) {
+                val x = x0 + ((col + 0.5f) * (x1 - x0) / COLS).toInt()
+                var evidence = 0
+                for (dy in -2..2 step 2) for (dx in -2..2 step 2) {
+                    val c = frame.getPixel((x + dx).coerceIn(0, frame.width - 1),
+                        (y + dy).coerceIn(0, frame.height - 1))
+                    val r = (c shr 16) and 255
+                    val g = (c shr 8) and 255
+                    val b = c and 255
+                    val hi = max(r, max(g, b))
+                    val lo = minOf(r, g, b)
+                    if (hi > 190 && lo > 135 && hi - lo < 105) evidence++
+                }
+                grid[row][col] = evidence
             }
-            xi++
-            x += stepX
         }
+        return grid
+    }
 
-        // Find the strongest compact obstacle cluster and retain its width.
-        var bestStart = -1
-        var bestEnd = -1
-        var bestScore = 0
-        var i = 0
-        while (i < counts.size) {
-            if (counts[i] < 2) { i++; continue }
-            val start = i
+    private fun detectObstacles(grid: Array<IntArray>): List<Obstacle> {
+        val columns = IntArray(COLS)
+        var hazards = 0
+        for (col in 0 until COLS) for (row in 7 until 15) {
+            if (grid[row][col] >= 2) {
+                columns[col] += grid[row][col]
+                hazards++
+            }
+        }
+        lastGridHazards = hazards
+        val result = ArrayList<Obstacle>()
+        var col = 0
+        while (col < COLS) {
+            if (columns[col] < 3) { col++; continue }
+            val start = col
             var score = 0
-            while (i < counts.size && counts[i] >= 2) { score += counts[i]; i++ }
-            val span = i - start
-            if (span in 2..90 && score > bestScore) {
-                bestScore = score
-                bestStart = start
-                bestEnd = i - 1
+            while (col < COLS && columns[col] >= 3) {
+                score += columns[col]
+                col++
+            }
+            if (score >= 8) {
+                result.add(Obstacle(
+                    0.22f + start * (0.70f / COLS),
+                    0.22f + col * (0.70f / COLS),
+                    score
+                ))
             }
         }
+        return result
+    }
 
-        val minScore = max(7, ((yEnd - yStart) / stepY * 0.045f).toInt())
-        if (bestStart < 0 || bestScore < minScore) {
+    fun analyze(frame: Bitmap, now: Long = System.currentTimeMillis()): Decision {
+        if (frame.width < 200 || frame.height < 200) return Decision(false, "Кадр слишком маленький")
+        val grid = buildGrid(frame)
+        val target = detectObstacles(grid)
+            .filter { it.right > PLAYER_X - 0.03f }
+            .minByOrNull { it.left }
+
+        if (target == null) {
             stableFrames = 0
-            if (previousObstacleX < 0f || previousObstacleX < 0.37f) armed = true
-            previousObstacleX = -1f
-            previousFrameAt = now
-            estimatedVelocity = 0f
-            return Decision(false, "Ищу препятствие")
+            if (previousObstacleX >= 0f && previousObstacleX < PLAYER_X - 0.08f) {
+                armed = true
+                previousObstacleX = -1f
+                estimatedVelocity = 0f
+            }
+            return Decision(false, if (lastGridHazards == 0) "Сканирую сетку препятствий" else "Проверяю препятствия впереди")
         }
 
-        val centerIndex = (bestStart + bestEnd) / 2f
-        val obstacleX = (xStart + centerIndex * stepX) / width.toFloat()
-        val halfWidth = ((bestEnd - bestStart + 1) * stepX / 2f) / width.toFloat()
         stableFrames++
-
         val oldX = previousObstacleX
         if (oldX >= 0f && previousFrameAt > 0L) {
-            val dt = (now - previousFrameAt).coerceIn(35L, 250L).toFloat()
-            val velocity = (obstacleX - oldX) / dt
-            if (velocity < -0.00005f && velocity > -0.0045f) {
-                estimatedVelocity = if (estimatedVelocity == 0f) velocity
-                    else estimatedVelocity * 0.55f + velocity * 0.45f
+            val dt = (now - previousFrameAt).coerceIn(35L, 300L).toFloat()
+            val measured = (target.center - oldX) / dt
+            if (measured < -0.00004f && measured > -0.005f) {
+                estimatedVelocity = if (estimatedVelocity == 0f) measured
+                    else estimatedVelocity * 0.60f + measured * 0.40f
             }
         }
-        previousObstacleX = obstacleX
+        previousObstacleX = target.center
         previousFrameAt = now
 
-        if (obstacleX + halfWidth < PLAYER_X - 0.025f) armed = true
         val speed = -estimatedVelocity
-        if (speed <= 0.00005f) return Decision(false, "Отслеживаю препятствие")
+        if (speed <= 0.00005f) return Decision(false, "Сетка: измеряю скорость препятствия")
+        val nearMs = (target.left - PLAYER_X).coerceAtLeast(0f) / speed
+        val farMs = (target.right - PLAYER_X).coerceAtLeast(0f) / speed
 
-        // Estimate when the near and far edges reach the player.
-        val nearDistance = (obstacleX - halfWidth - PLAYER_X).coerceAtLeast(0f)
-        val farDistance = (obstacleX + halfWidth - PLAYER_X).coerceAtLeast(0f)
-        val nearMs = nearDistance / speed
-        val farMs = farDistance / speed
+        if (target.right < PLAYER_X - 0.035f && now >= airborneUntil) armed = true
+        val airborne = now < airborneUntil
+        val crossingFits = farMs <= JUMP_MS - 55f
+        val canTap = stableFrames >= 2 && armed && !airborne &&
+            nearMs in TAKEOFF_MIN_MS..TAKEOFF_MAX_MS &&
+            arcHeight(nearMs) >= MIN_CLEARANCE &&
+            arcHeight(farMs) >= MIN_CLEARANCE &&
+            crossingFits && now - lastTapAt >= COOLDOWN_MS
 
-        // A tap is sent only when the predicted parabolic arc clears the
-        // obstacle's full detected width, not just its center.
-        val arcClearsNearEdge = arcHeight(nearMs) >= MIN_ARC_CLEARANCE
-        val arcClearsFarEdge = arcHeight(farMs) >= MIN_ARC_CLEARANCE
-        val goodTakeoffWindow = nearMs in JUMP_TRIGGER_MIN_MS..JUMP_TRIGGER_MAX_MS
-        val crossingFitsArc = farMs <= JUMP_DURATION_MS - 70f
-
-        if (stableFrames >= 2 && armed && goodTakeoffWindow &&
-            crossingFitsArc && arcClearsNearEdge && arcClearsFarEdge &&
-            now - lastTapAt > TAP_COOLDOWN_MS) {
+        if (canTap) {
             armed = false
             lastTapAt = now
-            return Decision(true, "Дуга рассчитана — прыжок")
+            airborneUntil = now + AIRBORNE_GUARD_MS
+            return Decision(true, "Сетка рассчитала дугу — прыжок")
         }
 
         val status = when {
-            !armed -> "Кубик в прыжке / жду новое препятствие"
-            nearMs > JUMP_TRIGGER_MAX_MS -> "Рассчитываю дугу прыжка"
-            !crossingFitsArc -> "Препятствие шире расчётной дуги"
-            else -> "Проверяю высоту дуги"
+            airborne -> "Кубик в воздухе — слежу за следующим блоком"
+            !armed -> "Жду, пока препятствие останется позади"
+            nearMs > TAKEOFF_MAX_MS -> "Вижу препятствие — рассчитываю подход"
+            !crossingFits -> "Группа блоков длиннее расчётного прыжка"
+            else -> "Сетка проверяет дугу и высоту"
         }
         return Decision(false, status)
     }
