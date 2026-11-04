@@ -18,8 +18,8 @@ android {
         applicationId = "com.example.screenai"
         minSdk = 26
         targetSdk = 34
-        versionCode = (System.getenv("KAPRI_VERSION_CODE")?.toIntOrNull() ?: 1)
-        versionName = System.getenv("KAPRI_VERSION_NAME") ?: "1.0"
+        versionCode = (System.getenv("KAPRI_VERSION_CODE")?.toIntOrNull() ?: 2)
+        versionName = System.getenv("KAPRI_VERSION_NAME") ?: "1.1"
     }
     if (hasReleaseSigning) {
         signingConfigs {
