@@ -137,6 +137,16 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = pad })
 
+        val mobileRunner = Button(this).apply {
+            text = "ОТКРЫТЬ MOBILE RUNNER"
+            setTextColor(Color.rgb(105, 220, 135))
+            background = buttonBackground(Color.rgb(18, 25, 20), Color.rgb(55, 190, 95))
+            setOnClickListener { startActivity(Intent(this@MainActivity, MobileRunnerActivity::class.java)) }
+        }
+        root.addView(mobileRunner, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = pad })
+
         root.addView(TextView(this).apply {
             text = "Для автопилота отдельно включи службу «К.А.П.Р.И — управление экраном» в настройках специальных возможностей. Автопилот запускается только голосовой командой и останавливается командой «Капри, останови автопилот»."
             textSize = 12f
