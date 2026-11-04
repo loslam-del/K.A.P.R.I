@@ -3,6 +3,14 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val releaseStoreFile = System.getenv("KAPRI_KEYSTORE_PATH")
+val releaseStorePassword = System.getenv("KAPRI_KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("KAPRI_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("KAPRI_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.example.screenai"
     compileSdk = 34
@@ -10,8 +18,26 @@ android {
         applicationId = "com.example.screenai"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = (System.getenv("KAPRI_VERSION_CODE")?.toIntOrNull() ?: 1)
+        versionName = System.getenv("KAPRI_VERSION_NAME") ?: "1.0"
+    }
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("stableRelease") {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("stableRelease")
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
